@@ -1,0 +1,274 @@
+{
+  "name": "linkleap",
+  "displayName": "LinkLeap",
+  "description": "Double-click to follow links, paths, wiki links, URLs, custom patterns and definitions in any file — no more Ctrl+Click.",
+  "version": "0.1.0",
+  "publisher": "peckage",
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Peckage/linkleap.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Peckage/linkleap/issues"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "link",
+    "double click",
+    "ctrl click",
+    "markdown",
+    "wiki links",
+    "navigation"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "linkleap.openAtCursor",
+        "title": "Open Link at Cursor",
+        "category": "LinkLeap",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "linkleap.openAtCursorBeside",
+        "title": "Open Link at Cursor to the Side",
+        "category": "LinkLeap"
+      },
+      {
+        "command": "linkleap.pickLink",
+        "title": "Go to Link in File...",
+        "category": "LinkLeap"
+      },
+      {
+        "command": "linkleap.toggle",
+        "title": "Toggle Double-Click Links",
+        "category": "LinkLeap"
+      },
+      {
+        "command": "linkleap.toggleForLanguage",
+        "title": "Toggle Double-Click Links for Current Language",
+        "category": "LinkLeap"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "linkleap.openAtCursor",
+        "key": "alt+enter",
+        "when": "editorTextFocus && !findWidgetVisible && !notebookEditorFocused && !suggestWidgetVisible && !inlineSuggestionVisible"
+      },
+      {
+        "command": "linkleap.openAtCursorBeside",
+        "key": "alt+shift+enter",
+        "when": "editorTextFocus && !findWidgetVisible && !notebookEditorFocused && !suggestWidgetVisible && !inlineSuggestionVisible"
+      },
+      {
+        "command": "linkleap.pickLink",
+        "key": "ctrl+alt+o",
+        "mac": "cmd+alt+o",
+        "when": "editorFocus"
+      },
+      {
+        "command": "linkleap.toggle",
+        "key": "ctrl+alt+l",
+        "mac": "cmd+alt+l"
+      }
+    ],
+    "configuration": {
+      "title": "LinkLeap",
+      "properties": {
+        "linkleap.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "language-overridable",
+          "description": "Follow links on double-click. Can be set per language, e.g. \"[plaintext]\": { \"linkleap.enabled\": false }."
+        },
+        "linkleap.targets": {
+          "type": "array",
+          "scope": "language-overridable",
+          "items": {
+            "type": "string",
+            "enum": [
+              "patterns",
+              "markdown",
+              "wikiLinks",
+              "documentLinks",
+              "urlsAndPaths",
+              "definition"
+            ],
+            "enumDescriptions": [
+              "Your custom regex rules from `linkleap.patterns`.",
+              "Markdown link text `[text](href)`, reference links `[text][ref]` and `#heading` anchors.",
+              "Wiki links like `[[Note]]`, `[[Note#Heading]]` and `[[Note|alias]]`.",
+              "Anything VS Code itself makes Ctrl+Clickable (from installed link providers).",
+              "Bare URLs and file paths (with optional `:line:col`) in any file, including plain text and logs.",
+              "Go to Definition on code symbols."
+            ]
+          },
+          "default": [
+            "patterns",
+            "markdown",
+            "wikiLinks",
+            "documentLinks",
+            "urlsAndPaths"
+          ],
+          "markdownDescription": "Which kinds of targets a double-click follows, tried in order. Can be set per language. `definition` is off by default because double-clicking is also how you select a word in code — add it for languages where you want that."
+        },
+        "linkleap.triggerDelay": {
+          "type": "number",
+          "default": 300,
+          "minimum": 0,
+          "maximum": 2000,
+          "markdownDescription": "Milliseconds to wait after a double-click before following the link. If the selection changes again in that time (a triple-click or a double-click-drag), nothing is opened. Set to `0` for instant jumps."
+        },
+        "linkleap.clearSelection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Collapse the word selection that the double-click made once a link is followed."
+        },
+        "linkleap.openLocation": {
+          "type": "string",
+          "enum": [
+            "active",
+            "beside"
+          ],
+          "enumDescriptions": [
+            "Open in the current editor group.",
+            "Open in the editor group beside the current one."
+          ],
+          "default": "active",
+          "description": "Where files are opened."
+        },
+        "linkleap.openMarkdownIn": {
+          "type": "string",
+          "enum": [
+            "editor",
+            "preview"
+          ],
+          "default": "editor",
+          "description": "Open linked Markdown files as source or in the Markdown preview."
+        },
+        "linkleap.openUrlsIn": {
+          "type": "string",
+          "enum": [
+            "external",
+            "simpleBrowser"
+          ],
+          "enumDescriptions": [
+            "Your system's default browser.",
+            "VS Code's built-in Simple Browser (http/https only)."
+          ],
+          "default": "external",
+          "description": "Where web URLs are opened."
+        },
+        "linkleap.patterns": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "Custom rules that turn text into links. `target` may use `$0` (whole match), `$1`…`$9` (groups), `${workspaceFolder}`, `${file}` and `${fileDirname}`. It can be a URL or a file path (relative paths resolve from the workspace folder).",
+          "items": {
+            "type": "object",
+            "required": [
+              "pattern",
+              "target"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Label shown in the hover."
+              },
+              "pattern": {
+                "type": "string",
+                "description": "JavaScript regular expression, e.g. \"\\\\b([A-Z]+-\\\\d+)\\\\b\"."
+              },
+              "flags": {
+                "type": "string",
+                "description": "Regex flags, e.g. \"i\"."
+              },
+              "target": {
+                "type": "string",
+                "description": "URL or path template, e.g. \"https://jira.example.com/browse/$1\"."
+              },
+              "languages": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Only apply in these language IDs. Omit for all languages."
+              }
+            }
+          }
+        },
+        "linkleap.wikiLinks.fileExtensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "md",
+            "markdown",
+            "mdx"
+          ],
+          "description": "File extensions searched when resolving [[wiki links]]."
+        },
+        "linkleap.wikiLinks.offerToCreate": {
+          "type": "boolean",
+          "default": true,
+          "description": "Offer to create the note when a [[wiki link]] points to a note that doesn't exist yet."
+        },
+        "linkleap.hover.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a \"double-click to open\" hint when hovering over something LinkLeap can follow."
+        },
+        "linkleap.statusBar.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the LinkLeap on/off toggle in the status bar."
+        }
+      }
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "linkleap.openAtCursor",
+          "group": "navigation@0",
+          "when": "editorTextFocus"
+        },
+        {
+          "command": "linkleap.pickLink",
+          "group": "navigation@1",
+          "when": "editorTextFocus"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "tsc -p ./ --noEmit",
+    "test:unit": "npm run compile && node --test \"out/test/unit/**/*.test.js\"",
+    "test:integration": "npm run compile && node ./out/test/integration/runTests.js",
+    "test": "npm run test:unit && npm run test:integration",
+    "icon": "node scripts/make-icon.js",
+    "package": "vsce package",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.17.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.6.0",
+    "mocha": "^11.1.0",
+    "typescript": "^5.8.0"
+  }
+}

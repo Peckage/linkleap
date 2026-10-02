@@ -1,0 +1,9 @@
+{
+  "linkleap.patterns": [
+    {
+      "name": "Tracker",
+      "pattern": "\\b(ABC-\\d+)\\b",
+      "target": "https://tracker.example.com/browse/$1"
+    }
+  ]
+}
