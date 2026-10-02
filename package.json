@@ -1,8 +1,8 @@
 {
   "name": "linkleap",
   "displayName": "LinkLeap",
-  "description": "Double-click to follow links, paths, wiki links, URLs, custom patterns and definitions in any file — no more Ctrl+Click.",
-  "version": "0.1.0",
+  "description": "Double-click to follow links, paths, wiki links, issues, symbols and URLs in any file — no more Ctrl+Click. Plus peek mode, a link picker and backlinks.",
+  "version": "0.2.0",
   "publisher": "peckage",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -25,7 +25,10 @@
     "ctrl click",
     "markdown",
     "wiki links",
-    "navigation"
+    "backlinks",
+    "issues",
+    "navigation",
+    "peek"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -45,6 +48,11 @@
         "category": "LinkLeap"
       },
       {
+        "command": "linkleap.peekAtCursor",
+        "title": "Peek Link at Cursor",
+        "category": "LinkLeap"
+      },
+      {
         "command": "linkleap.pickLink",
         "title": "Go to Link in File...",
         "category": "LinkLeap"
@@ -58,6 +66,12 @@
         "command": "linkleap.toggleForLanguage",
         "title": "Toggle Double-Click Links for Current Language",
         "category": "LinkLeap"
+      },
+      {
+        "command": "linkleap.refreshBacklinks",
+        "title": "Refresh Backlinks",
+        "category": "LinkLeap",
+        "icon": "$(refresh)"
       }
     ],
     "keybindings": [
@@ -103,6 +117,8 @@
               "wikiLinks",
               "documentLinks",
               "urlsAndPaths",
+              "issues",
+              "symbols",
               "definition"
             ],
             "enumDescriptions": [
@@ -111,6 +127,8 @@
               "Wiki links like `[[Note]]`, `[[Note#Heading]]` and `[[Note|alias]]`.",
               "Anything VS Code itself makes Ctrl+Clickable (from installed link providers).",
               "Bare URLs and file paths (with optional `:line:col`) in any file, including plain text and logs.",
+              "Issue, pull/merge request and commit references (`#123`, `owner/repo#45`, `GH-12`, `!34`, SHAs), using the repository's git remote.",
+              "Code symbols mentioned in prose, like `parseConfig()` in backticks or camelCase words in Markdown, found with workspace symbol search.",
               "Go to Definition on code symbols."
             ]
           },
@@ -119,7 +137,9 @@
             "markdown",
             "wikiLinks",
             "documentLinks",
-            "urlsAndPaths"
+            "urlsAndPaths",
+            "issues",
+            "symbols"
           ],
           "markdownDescription": "Which kinds of targets a double-click follows, tried in order. Can be set per language. `definition` is off by default because double-clicking is also how you select a word in code — add it for languages where you want that."
         },
@@ -134,6 +154,20 @@
           "type": "boolean",
           "default": true,
           "description": "Collapse the word selection that the double-click made once a link is followed."
+        },
+        "linkleap.openMode": {
+          "type": "string",
+          "enum": [
+            "open",
+            "peek"
+          ],
+          "enumDescriptions": [
+            "Open the target in an editor.",
+            "Show the target in a peek window under the link. URLs, folders and binary files still open normally."
+          ],
+          "default": "open",
+          "scope": "language-overridable",
+          "description": "Whether following a link opens the target or peeks at it inline."
         },
         "linkleap.openLocation": {
           "type": "string",
@@ -224,6 +258,11 @@
           "default": true,
           "description": "Offer to create the note when a [[wiki link]] points to a note that doesn't exist yet."
         },
+        "linkleap.issues.repository": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Repository used for issue links when it can't be read from git, e.g. `owner/repo` (GitHub) or `https://gitlab.example.com/group/repo`. Leave empty to use the git `origin` remote."
+        },
         "linkleap.hover.enabled": {
           "type": "boolean",
           "default": true,
@@ -244,9 +283,30 @@
           "when": "editorTextFocus"
         },
         {
+          "command": "linkleap.peekAtCursor",
+          "group": "navigation@0",
+          "when": "editorTextFocus"
+        },
+        {
           "command": "linkleap.pickLink",
           "group": "navigation@1",
           "when": "editorTextFocus"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "linkleap.refreshBacklinks",
+          "when": "view == linkleap.backlinks",
+          "group": "navigation"
+        }
+      ]
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "linkleap.backlinks",
+          "name": "Backlinks",
+          "contextualTitle": "LinkLeap"
         }
       ]
     }

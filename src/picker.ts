@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
 import { patternRules, settings } from './config';
+import { issueSpans } from './core/issues';
 import { markdownSpans, Span } from './core/markdown';
 import { outermostSpans, textSpans } from './core/text';
 import { openLeap } from './open';
+import { remoteFor } from './git';
 import { describeLeap, documentLinksFor, Leap, resolveLeap } from './resolve';
 
 const MAX_LINES = 20_000;
@@ -21,11 +23,20 @@ const OPEN_BESIDE: vscode.QuickInputButton = {
 /** Every followable link in the document, in order. */
 export async function collectLinks(document: vscode.TextDocument): Promise<{ range: vscode.Range; leap: Leap }[]> {
   const rules = patternRules(document);
+  const targets = settings(document).targets;
+  const remote =
+    targets.includes('issues') && !/^(css|scss|sass|less|stylus)$/.test(document.languageId)
+      ? await remoteFor(document)
+      : undefined;
   const spansByLine = new Map<number, Span[]>();
   const lineCount = Math.min(document.lineCount, MAX_LINES);
   for (let line = 0; line < lineCount; line++) {
     const text = document.lineAt(line).text;
-    const spans = [...markdownSpans(text), ...textSpans(text, rules)];
+    const spans = [
+      ...markdownSpans(text),
+      ...textSpans(text, rules),
+      ...(remote ? issueSpans(text, { forge: remote.kind, commits: false }) : []),
+    ];
     if (spans.length) {
       spansByLine.set(line, spans);
     }
@@ -45,10 +56,12 @@ export async function collectLinks(document: vscode.TextDocument): Promise<{ ran
     }
   }
 
-  // Definitions are left out: every identifier in a code file would qualify.
-  const targets = settings(document).targets.filter((t) => t !== 'definition');
+  // Definitions and symbols are left out: every identifier in a code file would qualify.
+  const linkTargets = targets.filter((t) => t !== 'definition' && t !== 'symbols');
   const resolved = await Promise.all(
-    ranges.slice(0, MAX_LINKS).map(async (range) => ({ range, leap: await resolveLeap(document, range.start, { targets }) })),
+    ranges
+      .slice(0, MAX_LINKS)
+      .map(async (range) => ({ range, leap: await resolveLeap(document, range.start, { targets: linkTargets }) })),
   );
   return resolved.filter((r): r is { range: vscode.Range; leap: Leap } => !!r.leap);
 }

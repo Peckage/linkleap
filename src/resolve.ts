@@ -1,7 +1,8 @@
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { patternRules, settings, TargetKind } from './config';
+import { patternRules, PROSE_LANGUAGES, settings, TargetKind } from './config';
+import { findIssueRefAt, issueUrl } from './core/issues';
 import {
   findMarkdownLinkAt,
   findReferenceDefinition,
@@ -11,7 +12,9 @@ import {
   LinePosition,
   parseLineFragment,
 } from './core/markdown';
+import { declarationPattern, findSymbolRefAt } from './core/symbols';
 import { findPathAt, findPatternAt, findUrlAt } from './core/text';
+import { remoteFor } from './git';
 
 interface LeapBase {
   /** Which target kind found it. */
@@ -28,11 +31,17 @@ export type Leap = LeapBase &
     | { kind: 'missingNote'; name: string; folder: vscode.Uri }
   );
 
-type Resolver = (document: vscode.TextDocument, position: vscode.Position) => Promise<Leap | undefined>;
+type Resolver = (
+  document: vscode.TextDocument,
+  position: vscode.Position,
+  options: ResolveOptions,
+) => Promise<Leap | undefined>;
 
 export interface ResolveOptions {
   /** Only consider these kinds; defaults to the configured `linkleap.targets` for the document. */
   targets?: readonly TargetKind[];
+  /** Skip slow fallbacks (scanning source files) because this is only for a hover. */
+  quick?: boolean;
 }
 
 export async function resolveLeap(
@@ -43,7 +52,7 @@ export async function resolveLeap(
   const targets = options.targets ?? settings(document).targets;
   for (const target of targets) {
     try {
-      const leap = await RESOLVERS[target](document, position);
+      const leap = await RESOLVERS[target](document, position, options);
       if (leap) {
         return leap;
       }
@@ -141,6 +150,56 @@ const RESOLVERS: Record<TargetKind, Resolver> = {
     return undefined;
   },
 
+  async issues(document, position) {
+    // `#123` is a colour in stylesheets, not an issue.
+    if (/^(css|scss|sass|less|stylus)$/.test(document.languageId)) {
+      return undefined;
+    }
+    const line = document.lineAt(position.line).text;
+    // Cheap check first so we only look for the git remote when something issue-like is under the cursor.
+    const prose = PROSE_LANGUAGES.has(document.languageId);
+    if (!findIssueRefAt(line, position.character, { forge: 'gitlab', commits: prose })) {
+      return undefined;
+    }
+    const remote = await remoteFor(document);
+    if (!remote) {
+      return undefined;
+    }
+    const ref = findIssueRefAt(line, position.character, { forge: remote.kind, commits: prose });
+    return ref && { kind: 'uri', source: 'issues', uri: vscode.Uri.parse(issueUrl(remote, ref), true) };
+  },
+
+  async symbols(document, position, options) {
+    const ref = findSymbolRefAt(
+      document.lineAt(position.line).text,
+      position.character,
+      PROSE_LANGUAGES.has(document.languageId),
+    );
+    if (!ref) {
+      return undefined;
+    }
+    const symbols =
+      (await vscode.commands.executeCommand<vscode.SymbolInformation[]>('vscode.executeWorkspaceSymbolProvider', ref.name)) ??
+      [];
+    const seen = new Set<string>();
+    const matches = symbols
+      .filter((s) => s.name === ref.name || s.name.startsWith(`${ref.name}(`))
+      .sort((a, b) => symbolRank(a, ref.container) - symbolRank(b, ref.container))
+      .filter((s) => {
+        const key = `${s.location.uri.toString()}:${s.location.range.start.line}`;
+        return !seen.has(key) && !!seen.add(key);
+      });
+    if (!matches.length) {
+      // No language server answered (e.g. none is running yet), so look for a declaration ourselves.
+      const declarations = options.quick ? [] : await findDeclarations(ref.name);
+      return declarations.length ? { kind: 'definitions', source: 'symbols', locations: declarations } : undefined;
+    }
+    // When the reference names its container (`Foo.bar`), only keep symbols that live in it, if any do.
+    const inContainer = ref.container ? matches.filter((s) => s.containerName === ref.container) : [];
+    const locations = (inContainer.length ? inContainer : matches).slice(0, 20).map((s) => s.location);
+    return { kind: 'definitions', source: 'symbols', locations };
+  },
+
   async definition(document, position) {
     const results =
       (await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(
@@ -157,6 +216,59 @@ const RESOLVERS: Record<TargetKind, Resolver> = {
 };
 
 // ---------------------------------------------------------------------------------------------
+
+const DECLARATION_KINDS = new Set([
+  vscode.SymbolKind.Class,
+  vscode.SymbolKind.Interface,
+  vscode.SymbolKind.Function,
+  vscode.SymbolKind.Method,
+  vscode.SymbolKind.Enum,
+  vscode.SymbolKind.Struct,
+  vscode.SymbolKind.Module,
+  vscode.SymbolKind.Namespace,
+]);
+
+const SOURCE_GLOB =
+  '**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs,py,go,rs,java,kt,kts,scala,cs,fs,rb,php,swift,c,cc,cpp,h,hpp,m,lua,dart,ex,exs,erl,hs,ml,clj,vue,svelte}';
+const SOURCE_EXCLUDE = '{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/build/**,**/target/**,**/vendor/**,**/*.min.js}';
+const MAX_SOURCE_FILES = 3000;
+
+/** Text search for `name`'s declaration across the workspace's source files. */
+async function findDeclarations(name: string): Promise<vscode.Location[]> {
+  const pattern = declarationPattern(name);
+  const uris = await vscode.workspace.findFiles(SOURCE_GLOB, SOURCE_EXCLUDE, MAX_SOURCE_FILES);
+  const locations: vscode.Location[] = [];
+  const decoder = new TextDecoder();
+  for (let i = 0; i < uris.length && locations.length < 20; i += 50) {
+    await Promise.all(
+      uris.slice(i, i + 50).map(async (uri) => {
+        let text: string;
+        try {
+          text = decoder.decode(await vscode.workspace.fs.readFile(uri));
+        } catch {
+          return;
+        }
+        if (!text.includes(name)) {
+          return;
+        }
+        const lines = text.split(/\r?\n/);
+        for (let line = 0; line < lines.length; line++) {
+          const m = pattern.exec(lines[line]);
+          if (m) {
+            const start = m.index + m[0].length - name.length;
+            locations.push(new vscode.Location(uri, new vscode.Range(line, start, line, start + name.length)));
+          }
+        }
+      }),
+    );
+  }
+  return locations.sort((a, b) => a.uri.path.localeCompare(b.uri.path) || a.range.start.line - b.range.start.line);
+}
+
+/** Lower is better: matching container first, then declarations over variables and properties. */
+function symbolRank(symbol: vscode.SymbolInformation, container: string | undefined): number {
+  return (container && symbol.containerName === container ? 0 : 2) + (DECLARATION_KINDS.has(symbol.kind) ? 0 : 1);
+}
 
 const linkCache = new Map<string, { version: number; links: Thenable<vscode.DocumentLink[] | undefined> }>();
 
@@ -339,10 +451,12 @@ export function describeLeap(leap: Leap): string {
       const suffix = leap.position ? `:${leap.position.line}` : leap.heading ? `#${leap.heading}` : '';
       return leap.name ? `${leap.name}: ${where}${suffix}` : `${where}${suffix}`;
     }
-    case 'definitions':
+    case 'definitions': {
+      const noun = leap.source === 'symbols' ? 'symbol' : 'definition';
       return leap.locations.length === 1
-        ? `definition in ${vscode.workspace.asRelativePath(leap.locations[0].uri)}:${leap.locations[0].range.start.line + 1}`
-        : `${leap.locations.length} definitions`;
+        ? `${noun} in ${vscode.workspace.asRelativePath(leap.locations[0].uri)}:${leap.locations[0].range.start.line + 1}`
+        : `${leap.locations.length} ${noun}s`;
+    }
     case 'builtin':
       return 'link';
     case 'missingNote':

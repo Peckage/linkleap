@@ -1,6 +1,9 @@
 import * as assert from 'assert';
+import { execFileSync } from 'child_process';
 import * as vscode from 'vscode';
 import type { LinkLeapApi } from '../../../extension';
+import { BacklinkIndex } from '../../../backlinks';
+import { issueUrl, parseRemoteUrl } from '../../../core/issues';
 import { collectLinks } from '../../../picker';
 import type { Leap } from '../../../resolve';
 
@@ -130,6 +133,65 @@ describe('LinkLeap', () => {
     });
   });
 
+  describe('issues, symbols, peek and backlinks', () => {
+    it('links #5 to the repository from git', async () => {
+      const origin = execFileSync('git', ['config', '--get', 'remote.origin.url'], { cwd: workspace().fsPath })
+        .toString()
+        .trim();
+      const remote = parseRemoteUrl(origin)!;
+      const expected = issueUrl(remote, { start: 0, end: 0, kind: 'issue', id: '5' });
+      assertUri(await api.resolve(readme, at('#5', 1), ['issues']), expected);
+    });
+
+    it('finds symbols mentioned in prose', async function () {
+      // Workspace symbols come from the TypeScript server, so make sure it has a TS file open.
+      await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(file('src/app.ts')));
+      const inApp = (l: Leap | undefined) =>
+        l?.kind === 'definitions' && l.locations.some((loc) => loc.uri.fsPath === file('src/app.ts').fsPath);
+      let leap: Leap | undefined;
+      for (let attempt = 0; attempt < 60 && !inApp(leap); attempt++) {
+        leap = await api.resolve(readme, at('`double()`', 2), ['symbols']);
+        if (!inApp(leap)) {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+      }
+      assert.ok(inApp(leap), `unexpected ${JSON.stringify(leap)}`);
+      assert.equal(await api.resolve(readme, at('twice', 1), ['symbols']), undefined);
+    });
+
+    it('peeks instead of opening when openMode is peek', async () => {
+      const config = vscode.workspace.getConfiguration('linkleap');
+      await config.update('openMode', 'peek', vscode.ConfigurationTarget.Global);
+      try {
+        const editor = await vscode.window.showTextDocument(readme);
+        editor.selection = new vscode.Selection(at('the guide', 4), at('the guide', 4));
+        await vscode.commands.executeCommand('linkleap.openAtCursor');
+        assert.equal(vscode.window.activeTextEditor!.document.uri.fsPath, readme.uri.fsPath);
+      } finally {
+        await config.update('openMode', undefined, vscode.ConfigurationTarget.Global);
+      }
+    });
+
+    it('indexes backlinks from markdown, reference and wiki links', async () => {
+      const index = new BacklinkIndex();
+      try {
+        const toGuide = await index.backlinksTo(file('docs/guide.md'));
+        assert.deepEqual(
+          toGuide.map((b) => [vscode.workspace.asRelativePath(b.source), b.range.start.line]),
+          [
+            ['README.md', 2],
+            ['README.md', 3],
+            ['README.md', readme.lineCount - 2],
+          ],
+        );
+        const toNotes = await index.backlinksTo(file('notes/notes.md'));
+        assert.deepEqual(toNotes.map((b) => readme.getText(b.range)), ['[[Notes]]']);
+      } finally {
+        index.dispose();
+      }
+    });
+  });
+
   describe('keyboard', () => {
     it('opens a link to the side', async () => {
       const editor = await vscode.window.showTextDocument(readme, vscode.ViewColumn.One);
@@ -151,6 +213,7 @@ describe('LinkLeap', () => {
         '[usage](#usage)',
         'https://example.com/page',
         'ABC-42',
+        '#5',
         '[[Missing Note]]',
         '[g]: docs/guide.md',
       ]);

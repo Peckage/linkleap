@@ -13,7 +13,7 @@ export class LeapHoverProvider implements vscode.HoverProvider {
     }
     // Definitions already have their own hovers, and asking for them on every hover is costly.
     const targets = config.targets.filter((t) => t !== 'definition');
-    const leap = await resolveLeap(document, position, { targets });
+    const leap = await resolveLeap(document, position, { targets, quick: true });
     if (!leap) {
       return undefined;
     }

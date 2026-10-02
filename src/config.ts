@@ -1,7 +1,15 @@
 import * as vscode from 'vscode';
 import { compileRule, PatternRule } from './core/text';
 
-export type TargetKind = 'patterns' | 'markdown' | 'wikiLinks' | 'documentLinks' | 'urlsAndPaths' | 'definition';
+export type TargetKind =
+  | 'patterns'
+  | 'markdown'
+  | 'wikiLinks'
+  | 'documentLinks'
+  | 'urlsAndPaths'
+  | 'issues'
+  | 'symbols'
+  | 'definition';
 
 export const ALL_TARGETS: readonly TargetKind[] = [
   'patterns',
@@ -9,8 +17,24 @@ export const ALL_TARGETS: readonly TargetKind[] = [
   'wikiLinks',
   'documentLinks',
   'urlsAndPaths',
+  'issues',
+  'symbols',
   'definition',
 ];
+
+/** Languages where people write prose, so code-shaped words and commit SHAs are likely references. */
+export const PROSE_LANGUAGES = new Set([
+  'markdown',
+  'mdx',
+  'plaintext',
+  'restructuredtext',
+  'asciidoc',
+  'git-commit',
+  'git-rebase',
+  'scminput',
+  'log',
+  'diff',
+]);
 
 const DEFAULT_SEPARATORS = '`~!@#$%^&*()-=+[{]}\\|;:\'",.<>/?';
 
@@ -21,6 +45,7 @@ export function settings(document?: vscode.TextDocument) {
     targets: cfg.get<string[]>('targets', []).filter((t): t is TargetKind => ALL_TARGETS.includes(t as TargetKind)),
     triggerDelay: Math.max(0, cfg.get<number>('triggerDelay', 300)),
     clearSelection: cfg.get<boolean>('clearSelection', true),
+    openMode: cfg.get<'open' | 'peek'>('openMode', 'open'),
     openLocation: cfg.get<'active' | 'beside'>('openLocation', 'active'),
     openMarkdownIn: cfg.get<'editor' | 'preview'>('openMarkdownIn', 'editor'),
     openUrlsIn: cfg.get<'external' | 'simpleBrowser'>('openUrlsIn', 'external'),

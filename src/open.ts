@@ -1,14 +1,18 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { settings } from './config';
-import { findHeadingLine } from './core/markdown';
+import { findHeadingLine, LinePosition } from './core/markdown';
 import { isWorkspaceScheme, Leap } from './resolve';
 
 const MARKDOWN_FILE = /\.(md|markdown|mdx)$/i;
+/** Files a peek window can't show; these always open normally. */
+const BINARY_FILE = /\.(png|jpe?g|gif|webp|bmp|ico|svg|pdf|zip|gz|tgz|7z|rar|mp[34]|wav|ogg|webm|mov|woff2?|ttf|otf|exe|dll|so|dylib|class|jar|wasm)$/i;
 
 export interface OpenOptions {
   /** Overrides `linkleap.openLocation`. */
   beside?: boolean;
+  /** Overrides `linkleap.openMode`. */
+  peek?: boolean;
 }
 
 export async function openLeap(
@@ -20,6 +24,7 @@ export async function openLeap(
   const config = settings(editor?.document);
   const beside = options.beside ?? config.openLocation === 'beside';
   const viewColumn = beside ? vscode.ViewColumn.Beside : vscode.ViewColumn.Active;
+  const peek = !!editor && !options.beside && (options.peek ?? config.openMode === 'peek');
 
   switch (leap.kind) {
     case 'builtin':
@@ -30,18 +35,11 @@ export async function openLeap(
       return;
 
     case 'definitions':
-      if (leap.locations.length === 1 || !editor) {
+      if (editor && (peek || leap.locations.length > 1)) {
+        await peekLocations(editor, position, leap.locations);
+      } else {
         const [location] = leap.locations;
         await showRange(location.uri, location.range, options.beside ? undefined : editor, viewColumn);
-      } else {
-        await vscode.commands.executeCommand(
-          'editor.action.goToLocations',
-          editor.document.uri,
-          position,
-          leap.locations,
-          'peek',
-          'No definition found',
-        );
       }
       return;
 
@@ -75,6 +73,12 @@ export async function openLeap(
     return;
   }
 
+  if (peek && editor && !BINARY_FILE.test(uri.path)) {
+    const range = await targetRange(uri, leap.position, leap.heading);
+    await peekLocations(editor, position, [new vscode.Location(uri, range ?? new vscode.Position(0, 0))]);
+    return;
+  }
+
   const isOtherFile = uri.toString() !== editor?.document.uri.toString();
   if (isOtherFile && config.openMarkdownIn === 'preview' && MARKDOWN_FILE.test(uri.path)) {
     await vscode.commands.executeCommand(
@@ -84,13 +88,7 @@ export async function openLeap(
     return;
   }
 
-  let range: vscode.Range | undefined;
-  if (leap.position) {
-    const at = new vscode.Position(leap.position.line - 1, Math.max(0, (leap.position.column ?? 1) - 1));
-    range = new vscode.Range(at, at);
-  } else if (leap.heading) {
-    range = await headingRange(uri, leap.heading);
-  }
+  const range = await targetRange(uri, leap.position, leap.heading);
   await showRange(uri, range, options.beside ? undefined : editor, viewColumn);
 }
 
@@ -112,6 +110,28 @@ async function showRange(
     return;
   }
   await vscode.commands.executeCommand('vscode.open', uri, { viewColumn, selection: range });
+}
+
+async function targetRange(
+  uri: vscode.Uri,
+  position: LinePosition | undefined,
+  heading: string | undefined,
+): Promise<vscode.Range | undefined> {
+  if (position) {
+    const at = new vscode.Position(position.line - 1, Math.max(0, (position.column ?? 1) - 1));
+    return new vscode.Range(at, at);
+  }
+  return heading ? headingRange(uri, heading) : undefined;
+}
+
+function peekLocations(editor: vscode.TextEditor, position: vscode.Position, locations: vscode.Location[]) {
+  return vscode.commands.executeCommand(
+    'editor.action.peekLocations',
+    editor.document.uri,
+    position,
+    locations,
+    'peek',
+  );
 }
 
 async function headingRange(uri: vscode.Uri, heading: string): Promise<vscode.Range | undefined> {

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { BacklinkIndex, BacklinksView } from './backlinks';
 import { settings, TargetKind, wordSeparators } from './config';
 import { DoubleClickDetector } from './core/doubleClick';
 import { LeapHoverProvider } from './hover';
@@ -45,7 +46,7 @@ export function activate(context: vscode.ExtensionContext): LinkLeapApi {
     await openLeap(leap, editor, position);
   }
 
-  async function openAtCursor(beside: boolean): Promise<void> {
+  async function openAtCursor(options: { beside?: boolean; peek?: boolean }): Promise<void> {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
       return;
@@ -60,11 +61,17 @@ export function activate(context: vscode.ExtensionContext): LinkLeapApi {
       vscode.window.setStatusBarMessage('LinkLeap: nothing to open here', 2500);
       return;
     }
-    await openLeap(leap, editor, position, { beside });
+    await openLeap(leap, editor, position, options);
   }
+
+  const backlinkIndex = new BacklinkIndex();
+  const backlinksView = new BacklinksView(backlinkIndex);
 
   context.subscriptions.push(
     statusBar,
+    backlinkIndex,
+    backlinksView,
+    vscode.commands.registerCommand('linkleap.refreshBacklinks', () => backlinkIndex.rebuild()),
 
     vscode.window.onDidChangeTextEditorSelection((event) => {
       cancelPending();
@@ -127,8 +134,9 @@ export function activate(context: vscode.ExtensionContext): LinkLeapApi {
       vscode.window.setStatusBarMessage(`LinkLeap: double-click links ${enabled ? 'on' : 'off'} for ${languageId}`, 2500);
     }),
 
-    vscode.commands.registerCommand('linkleap.openAtCursor', () => openAtCursor(false)),
-    vscode.commands.registerCommand('linkleap.openAtCursorBeside', () => openAtCursor(true)),
+    vscode.commands.registerCommand('linkleap.openAtCursor', () => openAtCursor({})),
+    vscode.commands.registerCommand('linkleap.openAtCursorBeside', () => openAtCursor({ beside: true })),
+    vscode.commands.registerCommand('linkleap.peekAtCursor', () => openAtCursor({ peek: true })),
     vscode.commands.registerCommand('linkleap.pickLink', async () => {
       const editor = vscode.window.activeTextEditor;
       if (editor) {
@@ -140,6 +148,9 @@ export function activate(context: vscode.ExtensionContext): LinkLeapApi {
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('linkleap')) {
         statusBar.update();
+      }
+      if (e.affectsConfiguration('linkleap.wikiLinks.fileExtensions')) {
+        void backlinkIndex.rebuild();
       }
     }),
     vscode.workspace.onDidCloseTextDocument(forgetDocument),

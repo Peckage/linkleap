@@ -222,3 +222,64 @@ export function markdownSpans(line: string): Span[] {
     ...(definition ? [{ start: 0, end: definition[0].length }] : []),
   ];
 }
+
+export interface ExtractedLink {
+  /** 0-based line. */
+  line: number;
+  start: number;
+  end: number;
+  /** `path` for Markdown hrefs and reference definitions, `wiki` for `[[wiki links]]`. */
+  kind: 'path' | 'wiki';
+  /** The href without its `#fragment`, or the wiki note name. */
+  target: string;
+}
+
+/** All links to local files in a Markdown document, skipping fenced code blocks and external URLs. */
+export function extractLinks(text: string): ExtractedLink[] {
+  const links: ExtractedLink[] = [];
+  let fence: string | undefined;
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const fenceMatch = FENCE.exec(line);
+    if (fenceMatch) {
+      const marker = fenceMatch[1];
+      if (!fence) {
+        fence = marker;
+      } else if (marker[0] === fence[0] && marker.length >= fence.length) {
+        fence = undefined;
+      }
+      continue;
+    }
+    if (fence) {
+      continue;
+    }
+    const addPath = (start: number, end: number, href: string) => {
+      const target = stripAngles(href).split('#')[0];
+      if (target && !/^[a-z][\w+.-]*:/i.test(target)) {
+        links.push({ line: i, start, end, kind: 'path', target });
+      }
+    };
+    WIKI_LINK.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = WIKI_LINK.exec(line))) {
+      if (m[1].trim()) {
+        links.push({ line: i, start: m.index, end: m.index + m[0].length, kind: 'wiki', target: m[1].trim() });
+      }
+    }
+    INLINE_LINK.lastIndex = 0;
+    while ((m = INLINE_LINK.exec(line))) {
+      addPath(m.index, m.index + m[0].length, m[2]);
+      // An image nested in a link's text: [![alt](img.png)](page.md)
+      const inner = /!\[[^\]]*\]\(([^)\s]+)/.exec(m[1]);
+      if (inner) {
+        addPath(m.index, m.index + m[0].length, inner[1]);
+      }
+    }
+    const definition = REFERENCE_DEFINITION.exec(line);
+    if (definition) {
+      addPath(0, definition[0].length, definition[2]);
+    }
+  }
+  return links;
+}
