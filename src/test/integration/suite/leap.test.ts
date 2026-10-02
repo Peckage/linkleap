@@ -85,11 +85,13 @@ describe('LinkLeap', () => {
       const use = await vscode.workspace.openTextDocument(file('src/use.ts'));
       await vscode.window.showTextDocument(use);
       const position = use.positionAt(use.getText().lastIndexOf('double') + 1);
-      // The TypeScript server needs a moment to start.
+      // The TypeScript server needs a moment to start; until the project loads it may point at the import.
+      const inApp = (l: Leap | undefined) =>
+        l?.kind === 'definitions' && l.locations[0].uri.fsPath === file('src/app.ts').fsPath;
       let leap: Leap | undefined;
-      for (let attempt = 0; attempt < 40 && !leap; attempt++) {
+      for (let attempt = 0; attempt < 60 && !inApp(leap); attempt++) {
         leap = await api.resolve(use, position, ['definition']);
-        if (!leap) {
+        if (!inApp(leap)) {
           await new Promise((r) => setTimeout(r, 500));
         }
       }
